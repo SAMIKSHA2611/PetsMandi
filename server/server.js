@@ -5,6 +5,7 @@ const cors = require('cors');
 const dotenv = require('dotenv');
 const connectDB = require('./config/db');
 const Message = require('./models/Message');
+const Pet = require('./models/Pet');
 
 dotenv.config();
 connectDB();
@@ -19,7 +20,6 @@ app.use('/api/auth', require('./routes/auth'));
 app.use('/api/pets', require('./routes/pets'));
 app.use('/api/chat', require('./routes/chat'));
 app.use('/api/purchase-requests', require('./routes/purchaseRequests'));
-app.use('/api/notifications', require('./routes/notifications'));
 app.use('/api/wishlist', require('./routes/wishlist'));
 
 const io = new Server(server, {
@@ -36,6 +36,11 @@ io.on('connection', (socket) => {
 
   socket.on('send_message', async (data) => {
     const { sender, receiver, pet, content } = data;
+    const listing = await Pet.findById(pet);
+    if (!listing) return socket.emit('chat_error', { message: 'This post is no longer available.' });
+    if (listing.isSold && listing.owner.toString() !== sender.toString()) {
+      return socket.emit('chat_error', { message: 'This post has been sold. New enquiries are no longer accepted.' });
+    }
     const newMessage = new Message({ sender, receiver, pet, content });
     await newMessage.save();
 

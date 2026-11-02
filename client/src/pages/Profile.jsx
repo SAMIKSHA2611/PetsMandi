@@ -10,7 +10,10 @@ export default function Profile() {
   const [transactions, setTransactions] = useState([]);
   const [payment, setPayment] = useState({ paymentPreference: 'UPI' });
   const [sellerPayments, setSellerPayments] = useState([]);
+  const [buyerPayments, setBuyerPayments] = useState([]);
   const [paymentDetails, setPaymentDetails] = useState(null);
+  const [paymentDetailsTransactionId, setPaymentDetailsTransactionId] = useState('');
+  const [selectedPaymentMethod, setSelectedPaymentMethod] = useState('');
   const [editingPayment, setEditingPayment] = useState(false);
   const [paymentMessage, setPaymentMessage] = useState('');
   const [wishlist, setWishlist] = useState([]);
@@ -25,6 +28,7 @@ export default function Profile() {
     axios.get('http://localhost:5000/api/purchase-requests').then((res) => setTransactions(res.data)).catch(() => {});
     axios.get('http://localhost:5000/api/auth/payment-preference').then((res) => setPayment(res.data)).catch(() => {});
     axios.get('http://localhost:5000/api/purchase-requests/payment-requests/seller').then((res) => setSellerPayments(res.data)).catch(() => {});
+    axios.get('http://localhost:5000/api/purchase-requests/payment-requests/buyer').then((res) => setBuyerPayments(res.data)).catch(() => {});
     axios.get('http://localhost:5000/api/wishlist').then((res) => setWishlist(res.data)).catch(() => {});
   }, []);
 
@@ -33,7 +37,7 @@ export default function Profile() {
       ? (await axios.get(`http://localhost:5000/api/purchase-requests/${transaction._id}/payment-details`).catch(() => null))?.data
       : null;
     const request = action === 'REPORT_PAYMENT'
-      ? axios.post(`http://localhost:5000/api/purchase-requests/${transaction._id}/payment-made`, { paymentMethod: details?.paymentPreference || 'UPI' })
+      ? axios.post(`http://localhost:5000/api/purchase-requests/${transaction._id}/payment-made`, { paymentMethod: selectedPaymentMethod || details?.paymentPreference || details?.paymentMethods?.[0] || 'UPI' })
       : axios.patch(`http://localhost:5000/api/purchase-requests/${transaction._id}/status`, { action });
     await request;
     const refreshed = await axios.get('http://localhost:5000/api/purchase-requests');
@@ -44,6 +48,8 @@ export default function Profile() {
     try {
       const result = await axios.get(`http://localhost:5000/api/purchase-requests/${transactionId}/payment-details`);
       setPaymentDetails(result.data);
+      setPaymentDetailsTransactionId(transactionId);
+      setSelectedPaymentMethod(result.data.paymentPreference || result.data.paymentMethods?.[0] || '');
     } catch (err) {
       setPaymentDetails(null);
       setPaymentMessage(err.response?.data?.message || 'Payment details are not available yet.');
@@ -58,6 +64,24 @@ export default function Profile() {
     } catch (err) {
       setPaymentMessage(err.response?.data?.message || 'Unable to save payment preference.');
     }
+  };
+
+  const listingId = (listing) => String(listing?._id || listing || '');
+  const postedTransactions = myPets.map((pet) => ({
+    pet,
+    requests: transactions.filter((transaction) => listingId(transaction.pet) === pet._id)
+  }));
+  const purchasedTransactions = transactions.filter((transaction) => transaction.buyer?._id === user?.id);
+
+  const transactionStatus = (transaction) => {
+    if (transaction.status === 'PENDING') return 'Waiting for seller acceptance';
+    if (transaction.status === 'REJECTED') return 'Request declined';
+    if (transaction.orderStatus === 'COMPLETED') return 'Completed';
+    if (transaction.orderStatus === 'CANCELLED') return 'Cancelled';
+    if (transaction.paymentStatus === 'PAYMENT_NOT_VERIFIED') return 'Payment needs verification';
+    if (transaction.paymentStatus === 'PAYMENT_CONFIRMED') return 'Payment confirmed';
+    if (transaction.paymentStatus === 'PAYMENT_IN_PROGRESS') return 'Payment awaiting seller confirmation';
+    return 'Payment pending';
   };
 
   return (
@@ -98,48 +122,60 @@ export default function Profile() {
             </div>}
             {paymentMessage && <p className="text-xs mt-2 text-gray-700">{paymentMessage}</p>}
           </div>
-          <h2 className="text-xl font-extrabold text-olxNavy mb-4">My Transactions</h2>
-          {sellerPayments.length > 0 && <div className="bg-white p-4 rounded border border-gray-300 mb-4">
-            <h3 className="font-bold text-olxNavy mb-3">Payment Requests</h3>
-            {sellerPayments.map((paymentRequest) => (
-              <div key={paymentRequest._id} className="border-t py-3 text-sm">
-                <p><b>Payment ID:</b> {paymentRequest.paymentId}</p>
-                <p><b>Buyer:</b> {paymentRequest.buyerId?.name}</p>
-                <p><b>Pet:</b> {paymentRequest.listingId?.title}</p>
-                <p><b>Amount:</b> ₹{paymentRequest.amount}</p>
-                <p><b>Method:</b> {paymentRequest.paymentMethod}</p>
-                <p><b>Status:</b> {paymentRequest.status}</p>
-                {paymentRequest.status === 'PAYMENT_IN_PROGRESS' && <div className="flex gap-2 mt-2">
-                  <button onClick={async () => { await axios.patch(`http://localhost:5000/api/purchase-requests/${paymentRequest.orderId}/payment-confirmation`, { confirmed: true }); window.location.reload(); }} className="bg-green-700 text-white px-3 py-1 rounded">Payment Received</button>
-                  <button onClick={async () => { if (window.confirm('Confirm that this payment was not received?')) { await axios.patch(`http://localhost:5000/api/purchase-requests/${paymentRequest.orderId}/payment-confirmation`, { confirmed: false }); window.location.reload(); } }} className="border border-red-600 text-red-700 px-3 py-1 rounded">Payment Not Received</button>
-                </div>}
-              </div>
-            ))}
-          </div>}
-          {paymentDetails && <div className="bg-white p-4 rounded border border-gray-300 mb-4 text-sm"><p className="font-bold text-olxNavy">Seller payment instructions</p><p>Method: {paymentDetails.paymentPreference}</p>{paymentDetails.upiId && <p>UPI: {paymentDetails.upiId}</p>}{paymentDetails.accountHolder && <p>Account holder: {paymentDetails.accountHolder}</p>}{paymentDetails.accountNumber && <p>Account number: {paymentDetails.accountNumber}</p>}{paymentDetails.bankIfsc && <p>IFSC: {paymentDetails.bankIfsc}</p>}<p className="mt-2 text-xs text-gray-600">{paymentDetails.warning}</p></div>}
-          <div className="space-y-3 mb-6">
-            {transactions.map((transaction) => (
-              <div key={transaction._id} className="bg-white p-4 rounded border border-gray-300 text-sm">
-                <p className="font-bold text-olxNavy">{transaction.pet?.title}</p>
-                <p>Status: {transaction.status}</p>
-                <p>Agreed price: ₹{transaction.amount}</p>
-                {user?.id === transaction.seller?._id && (
-                  <div className="flex gap-2 mt-2">
-                    {transaction.status === 'PENDING' && <><button onClick={() => axios.patch(`http://localhost:5000/api/purchase-requests/${transaction._id}/approve`).then(() => window.location.reload())} className="bg-olxNavy text-white px-3 py-1 rounded">Accept</button><button onClick={() => axios.patch(`http://localhost:5000/api/purchase-requests/${transaction._id}/reject`).then(() => window.location.reload())} className="border px-3 py-1 rounded">Reject</button></>}
-                    {transaction.status === 'APPROVED' && <button onClick={async () => { await axios.post(`http://localhost:5000/api/purchase-requests/${transaction._id}/share-payment`); }} className="bg-olxYellow px-3 py-1 rounded">Share Payment Details</button>}
-                    {transaction.status === 'PAYMENT_MARKED' && <p className="text-orange-700 font-bold">Buyer has notified the payment. Verify in your account.</p>}
+          {purchasedTransactions.length > 0 && <h2 className="text-xl font-extrabold text-olxNavy mb-4">My Purchases</h2>}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+            {purchasedTransactions.map((transaction) => (
+              <article key={transaction._id} className="bg-white rounded border border-gray-300 overflow-hidden">
+                <Link to={`/pet/${listingId(transaction.pet)}`} className="flex gap-4 p-4 hover:bg-gray-50">
+                  <img src={transaction.pet?.images?.[0]} alt={transaction.pet?.title} className="w-24 h-24 rounded object-cover bg-gray-100" />
+                  <div className="min-w-0">
+                    <p className="font-bold text-olxNavy truncate">{transaction.pet?.title}</p>
+                    <p className="text-sm">₹{Number(transaction.amount).toLocaleString('en-IN')}</p>
+                    <p className="mt-2 text-xs font-bold text-cyan-700">{transactionStatus(transaction)}</p>
                   </div>
-                )}
-                {user?.id === transaction.buyer?._id && transaction.status === 'APPROVED' && <button onClick={() => { if (window.confirm('Confirm that you have completed the direct payment?')) transactionAction(transaction, 'REPORT_PAYMENT'); }} className="mt-2 bg-olxYellow px-3 py-1 rounded text-xs">I Have Made the Payment</button>}
-                {user?.id === transaction.buyer?._id && transaction.status === 'APPROVED' && <button onClick={() => loadPaymentDetails(transaction._id)} className="ml-2 mt-2 border px-3 py-1 rounded text-xs">View Payment Details</button>}
-                {user?.id === transaction.buyer?._id && transaction.status === 'PAYMENT_MARKED' && <p className="mt-2 text-orange-700 font-bold">Payment notification sent. Waiting for seller verification.</p>}
-                {user?.id === transaction.buyer?._id && transaction.status === 'PAYMENT_CONFIRMED' && <button onClick={async () => { await axios.patch(`http://localhost:5000/api/purchase-requests/${transaction._id}/handover`); window.location.reload(); }} className="mt-2 bg-green-700 text-white px-3 py-1 rounded text-xs">I Received the Pet</button>}
-                {(user?.id === transaction.seller?._id || user?.id === transaction.buyer?._id) &&
-                  !['COMPLETED', 'PAYMENT_CONFIRMED'].includes(transaction.status) &&
-                  !['COMPLETED', 'CONFIRMED', 'CANCELLED'].includes(transaction.orderStatus) &&
-                  <button onClick={() => transactionAction(transaction, 'CANCEL')} className="ml-2 mt-2 border px-3 py-1 rounded text-xs">Cancel</button>}
-              </div>
+                </Link>
+                <div className="border-t px-4 py-3 text-sm">
+                  <p className="text-xs text-gray-500">Seller: {transaction.seller?.name}</p>
+                  <p className="mt-1 break-all text-xs text-gray-500">Transaction: {transaction.orderId}</p>
+                  <div className="mt-2 rounded border border-gray-200 bg-gray-50 p-3">
+                    <p><b>Payment:</b> {transactionStatus(transaction)}</p>
+                    {buyerPayments.filter((paymentRequest) => String(paymentRequest.orderId) === String(transaction._id)).map((paymentRequest) => (
+                      <div key={paymentRequest._id} className="mt-2 border-t pt-2">
+                        <p><b>Payment ID:</b> {paymentRequest.paymentId}</p>
+                        <p><b>Method:</b> {paymentRequest.paymentMethod}</p>
+                        <p><b>Amount:</b> ₹{Number(paymentRequest.amount).toLocaleString('en-IN')}</p>
+                        <p><b>Status:</b> {paymentRequest.status?.replaceAll('_', ' ')}</p>
+                      </div>
+                    ))}
+                    {!transaction.paymentSubmittedAt && <p className="mt-1 text-xs text-gray-500">Payment has not been submitted yet.</p>}
+                  </div>
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {transaction.status === 'APPROVED' && <button onClick={() => loadPaymentDetails(transaction._id)} className="border px-3 py-1.5 rounded text-xs font-bold">Payment Details</button>}
+                    {transaction.status === 'PAYMENT_CONFIRMED' && <button onClick={async () => { await axios.patch(`http://localhost:5000/api/purchase-requests/${transaction._id}/handover`); window.location.reload(); }} className="bg-green-700 text-white px-3 py-1.5 rounded text-xs font-bold">I Received the Pet</button>}
+                    {!['COMPLETED', 'PAYMENT_CONFIRMED'].includes(transaction.status) && !['COMPLETED', 'CONFIRMED', 'CANCELLED'].includes(transaction.orderStatus) && <button onClick={() => transactionAction(transaction, 'CANCEL')} className="border border-red-400 text-red-700 px-3 py-1.5 rounded text-xs font-bold">Cancel</button>}
+                  </div>
+                  {paymentDetails && paymentDetailsTransactionId === transaction._id && (
+                    <div className="mt-3 rounded border border-cyan-300 bg-cyan-50 p-3 text-sm">
+                      <p className="font-bold text-olxNavy">Seller payment method</p>
+                      {(paymentDetails.paymentMethods || [paymentDetails.paymentPreference]).length > 1 && (
+                        <select value={selectedPaymentMethod} onChange={(e) => setSelectedPaymentMethod(e.target.value)} className="mt-2 w-full border border-olxNavy rounded p-2 bg-white">
+                          {(paymentDetails.paymentMethods || []).map((method) => <option key={method} value={method}>{method.replaceAll('_', ' ')}</option>)}
+                        </select>
+                      )}
+                      {(paymentDetails.paymentMethods || [paymentDetails.paymentPreference]).length === 1 && <p className="mt-1"><b>{paymentDetails.paymentPreference.replaceAll('_', ' ')}</b></p>}
+                      {selectedPaymentMethod === 'UPI' && paymentDetails.upiId && <p className="mt-2 break-all"><b>UPI ID:</b> {paymentDetails.upiId}</p>}
+                      {selectedPaymentMethod === 'BANK_TRANSFER' && <>
+                        {paymentDetails.accountHolder && <p className="mt-2"><b>Account holder:</b> {paymentDetails.accountHolder}</p>}
+                        {paymentDetails.accountNumber && <p><b>Account number:</b> {paymentDetails.accountNumber}</p>}
+                        {paymentDetails.bankIfsc && <p><b>IFSC:</b> {paymentDetails.bankIfsc}</p>}
+                      </>}
+                      <button onClick={() => { if (window.confirm('Confirm that you have completed the direct payment using the selected method?')) transactionAction(transaction, 'REPORT_PAYMENT'); }} className="mt-3 bg-olxYellow text-olxNavy px-3 py-1.5 rounded text-xs font-bold">I Have Paid</button>
+                    </div>
+                  )}
+                </div>
+              </article>
             ))}
+            {purchasedTransactions.length === 0 && <div className="md:col-span-2 bg-white p-5 rounded border text-sm text-gray-600">No purchases yet. Listings you buy will appear here with their payment updates.</div>}
           </div>
           <h2 className="text-xl font-extrabold text-olxNavy mb-4">My Wishlist ({wishlist.length})</h2>
           {wishlist.length === 0 ? <div className="bg-white p-4 rounded border border-gray-300 mb-6 text-sm text-gray-600">No saved pets yet.</div> :
@@ -152,16 +188,53 @@ export default function Profile() {
               ))}
             </div>}
           <h2 className="text-xl font-extrabold text-olxNavy mb-4">My Posted Ads ({myPets.length})</h2>
-          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
-            {myPets.map((pet) => (
-              <Link to={`/pet/${pet._id}`} key={pet._id} className="bg-white border border-gray-300 rounded overflow-hidden shadow-xs">
-                <img src={pet.images[0]} alt={pet.title} className="w-full h-40 object-cover" />
-                <div className="p-3">
-                  <h3 className="text-lg font-extrabold text-olxNavy">₹ {pet.price.toLocaleString('en-IN')}</h3>
-                  <p className="text-sm text-gray-800 line-clamp-1">{pet.title}</p>
-                  {pet.isSold && <span className="inline-block mt-2 text-xs bg-red-600 text-white px-2 py-0.5 rounded font-bold">SOLD</span>}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {postedTransactions.map(({ pet, requests }) => (
+              <article key={pet._id} className="bg-white border border-gray-300 rounded overflow-hidden">
+                <Link to={`/pet/${pet._id}`} className="flex gap-4 p-4 hover:bg-gray-50">
+                  <img src={pet.images?.[0]} alt={pet.title} className="w-28 h-28 rounded object-cover bg-gray-100" />
+                  <div>
+                    <p className="font-bold text-olxNavy">{pet.title}</p>
+                    <p className="text-lg font-extrabold text-olxNavy">₹{Number(pet.price).toLocaleString('en-IN')}</p>
+                  </div>
+                </Link>
+                <div className="border-t">
+                  {requests.map((transaction) => (
+                    <div key={transaction._id} className="p-4 border-b last:border-b-0 text-sm">
+                      <div className="flex items-center justify-between gap-2">
+                        <p className="font-bold text-olxNavy">{transaction.buyer?.name}</p>
+                        <span className="text-xs font-bold text-gray-600">{transactionStatus(transaction)}</span>
+                      </div>
+                      <p className="text-xs text-gray-500 mt-1">{transaction.orderId}</p>
+                      {sellerPayments.filter((paymentRequest) => String(paymentRequest.orderId) === String(transaction._id)).map((paymentRequest) => (
+                        <div key={paymentRequest._id} className="mt-3 rounded border border-gray-300 bg-gray-50 p-3">
+                          <p className="font-bold text-olxNavy">Payment Request</p>
+                          <p className="mt-2 break-all"><b>Payment ID:</b> {paymentRequest.paymentId}</p>
+                          <p><b>Buyer:</b> {paymentRequest.buyerId?.name}</p>
+                          <p><b>Pet:</b> {paymentRequest.listingId?.title || pet.title}</p>
+                          <p><b>Amount:</b> ₹{Number(paymentRequest.amount).toLocaleString('en-IN')}</p>
+                          <p><b>Method:</b> {paymentRequest.paymentMethod}</p>
+                          <p><b>Status:</b> {paymentRequest.status?.replaceAll('_', ' ')}</p>
+                          {paymentRequest.status === 'PAYMENT_IN_PROGRESS' && <div className="mt-3 flex flex-wrap gap-2">
+                            <button onClick={async () => { await axios.patch(`http://localhost:5000/api/purchase-requests/${paymentRequest.orderId}/payment-confirmation`, { confirmed: true }); window.location.reload(); }} className="bg-green-700 text-white px-3 py-1.5 rounded font-bold">Payment Received</button>
+                            <button onClick={async () => { if (window.confirm('Confirm that this payment was not received?')) { await axios.patch(`http://localhost:5000/api/purchase-requests/${paymentRequest.orderId}/payment-confirmation`, { confirmed: false }); window.location.reload(); } }} className="border border-red-600 text-red-700 px-3 py-1.5 rounded font-bold">Payment Not Received</button>
+                          </div>}
+                        </div>
+                      ))}
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        {transaction.status === 'PENDING' && <>
+                          <button onClick={async () => { await axios.patch(`http://localhost:5000/api/purchase-requests/${transaction._id}/approve`); window.location.reload(); }} className="bg-green-700 text-white px-3 py-1.5 rounded text-xs font-bold">Accept Request</button>
+                          <button onClick={async () => { await axios.patch(`http://localhost:5000/api/purchase-requests/${transaction._id}/reject`); window.location.reload(); }} className="border border-red-600 text-red-700 px-3 py-1.5 rounded text-xs font-bold">Reject Request</button>
+                        </>}
+                        {transaction.status === 'APPROVED' && <button onClick={async () => { await axios.post(`http://localhost:5000/api/purchase-requests/${transaction._id}/share-payment`); }} className="bg-olxYellow px-3 py-1.5 rounded text-xs font-bold">Payment Details Shared</button>}
+                        {transaction.status === 'PAYMENT_MARKED' && <p className="text-xs font-bold text-orange-700">Buyer reported payment. Verify it below.</p>}
+                        {!['COMPLETED', 'PAYMENT_CONFIRMED'].includes(transaction.status) && !['COMPLETED', 'CONFIRMED', 'CANCELLED'].includes(transaction.orderStatus) && <button onClick={() => transactionAction(transaction, 'CANCEL')} className="border border-red-400 text-red-700 px-3 py-1.5 rounded text-xs font-bold">Cancel enquiry</button>}
+                      </div>
+                    </div>
+                  ))}
+                  {requests.length === 0 && <p className="p-4 text-sm text-gray-500">No buyer enquiries for this post yet.</p>}
                 </div>
-              </Link>
+              </article>
             ))}
           </div>
         </div>

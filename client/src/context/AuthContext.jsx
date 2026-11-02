@@ -8,8 +8,7 @@ export const AuthProvider = ({ children }) => {
   const [token, setToken] = useState(localStorage.getItem('token') || '');
 
   useEffect(() => {
-    if (token) axios.defaults.headers.common.Authorization = `Bearer ${token}`;
-    else delete axios.defaults.headers.common.Authorization;
+    axios.defaults.headers.common.Authorization = token ? `Bearer ${token}` : undefined;
   }, [token]);
 
   const login = (data) => {

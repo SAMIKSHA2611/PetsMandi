@@ -1,7 +1,7 @@
-import { useContext, useState } from 'react';
+import { useContext } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { AuthContext } from '../context/AuthContext';
-import { Search, MapPin, Plus, User as UserIcon, LogOut, Heart, MessageSquare } from 'lucide-react';
+import { Search, MapPin, Plus, User as UserIcon, LogOut } from 'lucide-react';
 
 export default function Navbar({ search, setSearch, location, setLocation, handleSearch }) {
   const { user, logout } = useContext(AuthContext);
@@ -83,6 +83,7 @@ export default function Navbar({ search, setSearch, location, setLocation, handl
       {/* OLX Sub-Category Header Bar */}
       <div className="bg-white border-t border-gray-200 px-4 py-2 shadow-xs">
         <div className="max-w-7xl mx-auto flex items-center gap-6 text-sm font-semibold text-olxNavy overflow-x-auto">
+          <Link to="/" className="font-extrabold text-cyan-700">HOME</Link>
           <span className="uppercase font-extrabold text-xs tracking-wider flex items-center gap-1 text-gray-500">
             ALL CATEGORIES
           </span>

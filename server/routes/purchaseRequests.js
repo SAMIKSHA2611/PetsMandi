@@ -5,7 +5,6 @@ const Pet = require('../models/Pet');
 const User = require('../models/User');
 const PurchaseRequest = require('../models/PurchaseRequest');
 const PaymentRequest = require('../models/PaymentRequest');
-const Notification = require('../models/Notification');
 const { decrypt } = require('../utils/paymentEncryption');
 
 const router = express.Router();
@@ -39,13 +38,6 @@ router.post('/', async (req, res) => {
     if (pet.owner.toString() === req.user.id) return res.status(403).json({ message: 'You cannot request your own listing.' });
     if (pet.isSold || pet.status === 'SOLD' || pet.status === 'RESERVED') return res.status(409).json({ message: 'This pet is not available for new orders.' });
 
-    const reserved = await Pet.findOneAndUpdate(
-      { _id: pet._id, owner: { $ne: req.user.id }, isSold: { $ne: true }, status: { $ne: 'RESERVED' } },
-      { $set: { status: 'RESERVED' } },
-      { new: true }
-    );
-    if (!reserved) return res.status(409).json({ message: 'This pet was reserved by another buyer.' });
-
     const amount = Number(pet.price);
     const order = await PurchaseRequest.create({
       buyer: req.user.id,
@@ -54,20 +46,13 @@ router.post('/', async (req, res) => {
       amount,
       amountPaise: rupeesToPaise(amount),
       orderId: publicId('PMO'),
-      status: 'APPROVED',
+      status: 'PENDING',
       paymentStatus: 'PAYMENT_PENDING',
       orderStatus: 'PENDING_PAYMENT',
-      statusHistory: [{ status: 'Accepted', note: 'Listing reserved and payment order created.', changedBy: req.user.id }],
-      auditLog: [{ action: 'ORDER_CREATED', actor: req.user.id, note: 'Order created and listing reserved atomically.' }]
+      statusHistory: [{ status: 'Requested', note: 'Buyer sent a purchase request.', changedBy: req.user.id }],
+      auditLog: [{ action: 'ORDER_REQUESTED', actor: req.user.id, note: 'Buyer requested to purchase the listing.' }]
     });
 
-    await Notification.create({
-      user: pet.owner,
-      title: 'New purchase request',
-      message: `A buyer placed an order for ${pet.title}.`,
-      type: 'ORDER',
-      link: '/profile'
-    });
     res.status(201).json(order);
   } catch (err) {
     if (err.code === 11000) return res.status(409).json({ message: 'An active order already exists for this listing.' });
@@ -136,13 +121,6 @@ router.post('/:requestId/payment-made', async (req, res) => {
   request.paymentSubmittedAt = payment.submittedAt;
   request.auditLog.push({ action: 'BUYER_PAYMENT_CLAIMED', actor: req.user.id });
   await request.save();
-  await Notification.create({
-    user: request.seller,
-    title: 'Payment notification received',
-    message: `The buyer claims payment for order ${request.orderId}. Verify it in your account.`,
-    type: 'PAYMENT',
-    link: '/profile'
-  });
   res.json({ success: true, order: request, payment });
 });
 
@@ -150,6 +128,42 @@ router.get('/payment-requests/seller', async (req, res) => {
   const payments = await PaymentRequest.find({ sellerId: req.user.id })
     .populate('buyerId', 'name email phone')
     .populate('listingId', 'title price')
+    .sort({ createdAt: -1 });
+  res.json(payments);
+});
+
+router.patch('/:requestId/approve', async (req, res) => {
+  const request = await PurchaseRequest.findOne({ _id: req.params.requestId, seller: req.user.id, status: 'PENDING' });
+  if (!request) return res.status(404).json({ message: 'Pending purchase request not found.' });
+  const reserved = await Pet.findOneAndUpdate(
+    { _id: request.pet, owner: req.user.id, isSold: { $ne: true }, status: { $nin: ['RESERVED', 'SOLD'] } },
+    { $set: { status: 'RESERVED' } },
+    { new: true }
+  );
+  if (!reserved) return res.status(409).json({ message: 'This listing is already reserved or sold.' });
+  request.status = 'APPROVED';
+  request.statusHistory.push({ status: 'Accepted', note: 'Seller accepted the purchase request.', changedBy: req.user.id });
+  request.auditLog.push({ action: 'ORDER_ACCEPTED', actor: req.user.id });
+  await request.save();
+  res.json(request);
+});
+
+router.patch('/:requestId/reject', async (req, res) => {
+  const request = await PurchaseRequest.findOne({ _id: req.params.requestId, seller: req.user.id, status: 'PENDING' });
+  if (!request) return res.status(404).json({ message: 'Pending purchase request not found.' });
+  request.status = 'REJECTED';
+  request.paymentStatus = 'ORDER_CANCELLED';
+  request.orderStatus = 'CANCELLED';
+  request.statusHistory.push({ status: 'Rejected', note: 'Seller rejected the purchase request.', changedBy: req.user.id });
+  request.auditLog.push({ action: 'ORDER_REJECTED', actor: req.user.id });
+  await request.save();
+  res.json(request);
+});
+
+router.get('/payment-requests/buyer', async (req, res) => {
+  const payments = await PaymentRequest.find({ buyerId: req.user.id })
+    .populate('listingId', 'title price images')
+    .populate('sellerId', 'name')
     .sort({ createdAt: -1 });
   res.json(payments);
 });
@@ -191,13 +205,6 @@ router.patch('/:requestId/payment-confirmation', async (req, res) => {
   request.paymentRejectionReason = verified ? undefined : String(req.body.reason || '');
   request.auditLog.push({ action: verified ? 'PAYMENT_RECEIVED' : 'PAYMENT_NOT_RECEIVED', actor: req.user.id });
   await request.save();
-  await Notification.create({
-    user: request.buyer,
-    title: verified ? 'Payment confirmed' : 'Payment needs resolution',
-    message: verified ? `Payment confirmed for order ${request.orderId}.` : `The seller could not verify payment for order ${request.orderId}.`,
-    type: verified ? 'PAYMENT' : 'PAYMENT_NOT_VERIFIED',
-    link: '/profile'
-  });
   res.json({ success: true, order: request, payment });
 });
 
@@ -211,7 +218,6 @@ router.patch('/:requestId/handover', async (req, res) => {
   request.handoverConfirmedBy = req.user.id;
   request.auditLog.push({ action: 'PET_RECEIVED', actor: req.user.id });
   await request.save();
-  await Notification.create({ user: request.seller, title: 'Pet handover confirmed', message: `The buyer confirmed receipt for order ${request.orderId}.`, type: 'ORDER', link: '/profile' });
   res.json(request);
 });
 

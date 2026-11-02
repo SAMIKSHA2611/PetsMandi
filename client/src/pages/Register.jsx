@@ -1,20 +1,25 @@
-import { useState, useContext } from 'react';
+import { useContext, useRef, useState } from 'react';
 import axios from 'axios';
-import { useNavigate, Link } from 'react-router-dom';
+import { useNavigate, useLocation, Link } from 'react-router-dom';
 import { AuthContext } from '../context/AuthContext';
 
 export default function Register() {
   const [form, setForm] = useState({ name: '', email: '', phone: '', password: '', confirmPassword: '', paymentPreference: 'UPI', upiId: '', accountHolder: '', accountNumber: '', ifsc: '' });
+  const [otp, setOtp] = useState(['', '', '', '', '', '']);
+  const [otpScreen, setOtpScreen] = useState(false);
+  const [verified, setVerified] = useState(false);
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
-  const [otp, setOtp] = useState('');
-  const [otpSent, setOtpSent] = useState(false);
-  const [sampleOtp, setSampleOtp] = useState('');
-  const [verified, setVerified] = useState(false);
+  const [developmentOtp, setDevelopmentOtp] = useState('');
+  const [sending, setSending] = useState(false);
+  const [verifying, setVerifying] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirm, setShowConfirm] = useState(false);
+  const otpInputs = useRef([]);
   const { login } = useContext(AuthContext);
   const navigate = useNavigate();
+  const location = useLocation();
+  const returnTo = location.state?.from || '/';
 
   const update = (field, value) => setForm({ ...form, [field]: value });
   const validate = () => {
@@ -32,40 +37,117 @@ export default function Register() {
     const validationError = validate();
     if (validationError) return setError(validationError);
     setError('');
+    setSending(true);
     try {
       const response = await axios.post('http://localhost:5000/api/auth/send-otp', form);
-      setOtpSent(true);
-      setSampleOtp(response.data?.devOtp || '');
-      setMessage(response.data?.devOtp ? `Sample OTP for verification: ${response.data.devOtp}` : response.data?.message || 'OTP sent successfully.');
+      setOtp(['', '', '', '', '', '']);
+      setOtpScreen(true);
+      setDevelopmentOtp(response.data?.devOtp || '');
+      setMessage(response.data?.message || 'Verification code generated.');
+      window.setTimeout(() => otpInputs.current[0]?.focus(), 50);
     } catch (err) {
       setError(err.response?.data?.message || 'Unable to send OTP.');
+    } finally {
+      setSending(false);
     }
   };
 
   const verifyOtp = async () => {
+    const code = otp.join('');
+    if (code.length !== 6) return setError('Enter the complete 6-digit verification code.');
     setError('');
+    setVerifying(true);
     try {
-      await axios.post('http://localhost:5000/api/auth/verify-email-otp', { email: form.email, otp });
+      await axios.post('http://localhost:5000/api/auth/verify-mobile-otp', { phone: form.phone, otp: code });
       setVerified(true);
-      setMessage('Email verified successfully.');
+      setOtpScreen(false);
+      setMessage('Mobile number verified successfully.');
     } catch (err) {
       setError(err.response?.data?.message || 'Invalid OTP.');
+    } finally {
+      setVerifying(false);
     }
+  };
+
+  const handleOtpChange = (index, value) => {
+    const digit = value.replace(/\D/g, '').slice(-1);
+    const next = [...otp];
+    next[index] = digit;
+    setOtp(next);
+    if (digit && index < 5) otpInputs.current[index + 1]?.focus();
+  };
+
+  const handleOtpKeyDown = (index, event) => {
+    if (event.key === 'Backspace' && !otp[index] && index > 0) otpInputs.current[index - 1]?.focus();
+  };
+
+  const handleOtpPaste = (event) => {
+    const digits = event.clipboardData.getData('text').replace(/\D/g, '').slice(0, 6).split('');
+    if (!digits.length) return;
+    event.preventDefault();
+    setOtp(Array.from({ length: 6 }, (_, index) => digits[index] || ''));
+    otpInputs.current[Math.min(digits.length, 5)]?.focus();
   };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
     const validationError = validate();
     if (validationError) return setError(validationError);
-    if (!verified) return setError('Please verify your email before creating an account.');
+    if (!verified) {
+      await sendOtp();
+      return;
+    }
     try {
       const res = await axios.post('http://localhost:5000/api/auth/register', form);
       login(res.data);
-      navigate('/');
+      navigate(returnTo, { replace: true });
     } catch (err) {
       setError(err.response?.data?.message || 'Registration failed');
     }
   };
+
+  if (otpScreen) {
+    return (
+      <div className="min-h-screen bg-white flex justify-center">
+        <div className="w-full max-w-xl px-6 pt-6 pb-10">
+          <button type="button" aria-label="Back" onClick={() => { setOtpScreen(false); setError(''); }} className="text-4xl leading-none text-gray-900 mb-10">←</button>
+          <div className="h-px bg-gray-900" />
+          <h1 className="mt-12 text-center text-3xl font-bold text-gray-950">Enter verification code</h1>
+          <p className="mt-8 text-center text-lg text-gray-800">
+            We sent a 6-digit code to <strong>+91 {form.phone}</strong>
+          </p>
+          {error && <p className="mt-6 rounded bg-red-50 px-4 py-3 text-center text-sm text-red-700">{error}</p>}
+          {message && !error && <p className="mt-6 text-center text-sm text-green-700">{message}</p>}
+          {developmentOtp && (
+            <button type="button" onClick={() => setOtp(developmentOtp.split(''))} className="mx-auto mt-3 block text-sm font-bold text-blue-600 underline">
+              Development OTP: {developmentOtp}
+            </button>
+          )}
+          <div className="mt-9 flex justify-between gap-2">
+            {otp.map((digit, index) => (
+              <input
+                key={index}
+                ref={(element) => { otpInputs.current[index] = element; }}
+                value={digit}
+                onChange={(event) => handleOtpChange(index, event.target.value)}
+                onKeyDown={(event) => handleOtpKeyDown(index, event)}
+                onPaste={handleOtpPaste}
+                inputMode="numeric"
+                autoComplete={index === 0 ? 'one-time-code' : 'off'}
+                maxLength="1"
+                aria-label={`Verification code digit ${index + 1}`}
+                className={`h-20 w-[15%] border text-center text-3xl outline-none ${index === otp.findIndex((item) => item === '') || (index === 5 && otp.every(Boolean)) ? 'border-blue-600 shadow-[inset_0_-4px_0_#2563eb]' : 'border-gray-400'}`}
+              />
+            ))}
+          </div>
+          <button type="button" disabled={verifying} onClick={verifyOtp} className="mt-10 w-full rounded bg-olxNavy py-3 font-bold text-white disabled:opacity-60">
+            {verifying ? 'VERIFYING...' : 'VERIFY'}
+          </button>
+          <button type="button" disabled={sending} onClick={sendOtp} className="mt-8 text-lg font-medium text-blue-600">Resend code by SMS</button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-olxLightGray flex items-center justify-center py-12 px-4">
@@ -76,16 +158,9 @@ export default function Register() {
         </div>
         {error && <div className="p-3 bg-red-100 border border-red-400 text-red-700 text-xs rounded mb-4">{error}</div>}
         {message && <div className="p-3 bg-green-100 border border-green-400 text-green-700 text-xs rounded mb-4">{message}</div>}
-        {sampleOtp && <div className="flex items-center justify-between p-3 border border-olxNavy rounded mb-3 bg-gray-50">
-          <span className="text-xs font-bold text-olxNavy">Sample Verification OTP</span>
-          <button type="button" onClick={() => setOtp(sampleOtp)} className="text-lg font-black tracking-widest text-olxNavy underline">{sampleOtp}</button>
-        </div>}
         <form onSubmit={handleSubmit} className="space-y-3">
           <input type="text" placeholder="Full Name" required value={form.name} className="w-full border-2 border-olxNavy p-2.5 rounded text-sm outline-none" onChange={(e) => update('name', e.target.value)} />
-          <div className="flex">
-            <input type="email" placeholder="Email Address" required value={form.email} className="min-w-0 w-full border-2 border-olxNavy p-2.5 rounded-l text-sm outline-none" onChange={(e) => update('email', e.target.value)} />
-            <button type="button" onClick={sendOtp} className="border-2 border-l-0 border-olxNavy px-3 rounded-r text-xs font-bold text-olxNavy">Send OTP</button>
-          </div>
+          <input type="email" placeholder="Email Address" required value={form.email} className="w-full border-2 border-olxNavy p-2.5 rounded text-sm outline-none" onChange={(e) => update('email', e.target.value)} />
           <input type="text" inputMode="numeric" maxLength="10" placeholder="Mobile Number" required value={form.phone} className="w-full border-2 border-olxNavy p-2.5 rounded text-sm outline-none" onChange={(e) => update('phone', e.target.value.replace(/\D/g, ''))} />
           <div>
             <label className="block text-xs font-bold text-olxNavy uppercase mb-1">Preferred Payment Method</label>
@@ -108,9 +183,10 @@ export default function Register() {
             <input type={showConfirm ? 'text' : 'password'} placeholder="Confirm Password" required value={form.confirmPassword} className="w-full border-2 border-olxNavy p-2.5 rounded-l text-sm outline-none" onChange={(e) => update('confirmPassword', e.target.value)} />
             <button type="button" onClick={() => setShowConfirm(!showConfirm)} className="border-2 border-l-0 border-olxNavy px-3 rounded-r text-xs font-bold">{showConfirm ? 'Hide' : 'Show'}</button>
           </div>
-          {otpSent && !verified && <div className="flex"><input inputMode="numeric" maxLength="6" placeholder="6-digit OTP" value={otp} className="min-w-0 w-full border-2 border-olxNavy p-2.5 rounded-l text-sm outline-none" onChange={(e) => setOtp(e.target.value.replace(/\D/g, ''))} /><button type="button" onClick={verifyOtp} className="border-2 border-l-0 border-olxNavy px-3 rounded-r text-xs font-bold text-olxNavy">Verify OTP</button></div>}
-          {verified && <p className="text-xs font-bold text-green-700">✓ Email verified</p>}
-          <button type="submit" className="w-full bg-olxNavy text-white font-extrabold py-3 rounded hover:bg-black transition mt-2">REGISTER</button>
+          {verified && <p className="text-xs font-bold text-green-700">✓ Mobile number verified</p>}
+          <button type="submit" disabled={sending} className="w-full bg-olxNavy text-white font-extrabold py-3 rounded hover:bg-black transition mt-2 disabled:opacity-60">
+            {sending ? 'SENDING OTP...' : verified ? 'REGISTER' : 'VERIFY MOBILE & REGISTER'}
+          </button>
         </form>
         <p className="mt-6 text-center text-xs text-gray-600">Already have an account? <Link to="/login" className="text-cyan-700 font-bold underline">Login</Link></p>
       </div>

@@ -46,7 +46,7 @@ export default function PetDetail() {
   };
 
   const statusLabel = {
-    PENDING_PAYMENT: 'Order Created - Payment Pending',
+    PENDING_PAYMENT: 'Waiting for Seller Acceptance',
     AWAITING_SELLER_PAYMENT_CONFIRMATION: 'Payment In Progress',
     CONFIRMED: 'Payment Confirmed',
     PAYMENT_NOT_VERIFIED: 'Payment Needs Resolution',
@@ -168,13 +168,15 @@ export default function PetDetail() {
             </div>
 
             {/* Mobile Contact Button */}
-            <button
-              onClick={() => setShowPhone(!showPhone)}
-              className="w-full bg-olxNavy text-white font-extrabold py-3 rounded border-2 border-olxNavy flex items-center justify-center gap-2 hover:bg-black transition"
-            >
-              <Phone size={18} />
-              {showPhone ? pet.owner?.phone : 'Show Mobile Number'}
-            </button>
+            {!pet.isSold && (
+              <button
+                onClick={() => setShowPhone(!showPhone)}
+                className="w-full bg-olxNavy text-white font-extrabold py-3 rounded border-2 border-olxNavy flex items-center justify-center gap-2 hover:bg-black transition"
+              >
+                <Phone size={18} />
+                {showPhone ? pet.owner?.phone : 'Show Mobile Number'}
+              </button>
+            )}
 
             {/* Direct buyer-to-seller request */}
             {order && (
@@ -199,7 +201,7 @@ export default function PetDetail() {
             )}
 
             {/* In-App Direct Chat Button */}
-            {user && user.id !== pet.owner?._id && (
+            {user && user.id !== pet.owner?._id && !pet.isSold && (
               <button
                 onClick={() => navigate(`/chat/${pet._id}/${pet.owner._id}`)}
                 className="w-full bg-white border-2 border-olxNavy text-olxNavy font-extrabold py-3 rounded flex items-center justify-center gap-2 hover:bg-gray-100 transition"

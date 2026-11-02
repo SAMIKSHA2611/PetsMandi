@@ -12,10 +12,14 @@ export default function Chat() {
   const { user } = useContext(AuthContext);
   const [messages, setMessages] = useState([]);
   const [text, setText] = useState('');
+  const [pet, setPet] = useState(null);
 
   useEffect(() => {
     axios.get(`http://localhost:5000/api/chat/${petId}/${otherUserId}`)
       .then((res) => setMessages(res.data))
+      .catch((err) => console.error(err));
+    axios.get(`http://localhost:5000/api/pets/${petId}`)
+      .then((res) => setPet(res.data))
       .catch((err) => console.error(err));
 
     socket.emit('join_chat', { petId, userId: user.id });
@@ -23,8 +27,14 @@ export default function Chat() {
     socket.on(`receive_message_${petId}`, (msg) => {
       setMessages((prev) => [...prev, msg]);
     });
+    socket.on('chat_error', (error) => {
+      alert(error.message);
+    });
 
-    return () => socket.off(`receive_message_${petId}`);
+    return () => {
+      socket.off(`receive_message_${petId}`);
+      socket.off('chat_error');
+    };
   }, [petId, otherUserId]);
 
   const sendMessage = (e) => {
@@ -61,6 +71,11 @@ export default function Chat() {
             ))}
           </div>
 
+          {pet?.isSold && String(pet.owner?._id) !== String(user?.id) ? (
+            <div className="p-4 bg-red-50 border-t border-red-200 text-sm text-red-700 font-bold text-center">
+              This post has been sold. New enquiries are no longer accepted.
+            </div>
+          ) : (
           <form onSubmit={sendMessage} className="p-3 bg-white border-t flex gap-2">
             <input
               type="text"
@@ -73,6 +88,7 @@ export default function Chat() {
               Send
             </button>
           </form>
+          )}
         </div>
       </main>
     </div>

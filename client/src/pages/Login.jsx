@@ -1,6 +1,6 @@
 import { useState, useContext } from 'react';
 import axios from 'axios';
-import { useNavigate, Link } from 'react-router-dom';
+import { useNavigate, useLocation, Link } from 'react-router-dom';
 import { AuthContext } from '../context/AuthContext';
 
 export default function Login() {
@@ -9,6 +9,8 @@ export default function Login() {
   const [showPassword, setShowPassword] = useState(false);
   const { login } = useContext(AuthContext);
   const navigate = useNavigate();
+  const location = useLocation();
+  const returnTo = location.state?.from || '/';
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -23,7 +25,7 @@ export default function Login() {
         password: formData.password
       });
       login(res.data);
-      navigate('/');
+      navigate(returnTo, { replace: true });
     } catch (err) {
       setError(err.response?.data?.message || 'Login failed');
     }
@@ -54,7 +56,7 @@ export default function Login() {
           <div className="text-right"><Link to="/forgot-password" className="text-cyan-700 text-xs font-bold underline">Forgot Password?</Link></div>
           <button type="submit" className="w-full bg-olxNavy text-white font-extrabold py-3 rounded hover:bg-black transition">LOG IN</button>
         </form>
-        <p className="mt-6 text-center text-xs text-gray-600">New to PetsMandi? <Link to="/register" className="text-cyan-700 font-bold underline">Create an Account</Link></p>
+        <p className="mt-6 text-center text-xs text-gray-600">New to PetsMandi? <Link to="/register" state={{ from: returnTo }} className="text-cyan-700 font-bold underline">Create an Account</Link></p>
       </div>
     </div>
   );

@@ -12,7 +12,12 @@ router.get('/', async (req, res) => {
     if (location) query.location = { $regex: location, $options: 'i' };
 
     const pets = await Pet.find(query).populate('owner', 'name phone city').sort({ createdAt: -1 });
-    res.json(pets);
+    res.json(pets.map((pet) => {
+      if (pet.isSold || pet.status === 'SOLD') {
+        pet.owner.phone = undefined;
+      }
+      return pet;
+    }));
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
@@ -31,6 +36,9 @@ router.get('/:id', async (req, res) => {
   try {
     const pet = await Pet.findById(req.params.id).populate('owner', 'name phone city email');
     if (!pet) return res.status(404).json({ message: 'Pet not found' });
+    if (pet.isSold || pet.status === 'SOLD') {
+      pet.owner.phone = undefined;
+    }
     res.json(pet);
   } catch (err) {
     res.status(500).json({ message: err.message });

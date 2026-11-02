@@ -5,6 +5,7 @@ const jwt = require('jsonwebtoken');
 const nodemailer = require('nodemailer');
 const User = require('../models/User');
 const EmailOtp = require('../models/EmailOtp');
+const PhoneOtp = require('../models/PhoneOtp');
 const { encrypt } = require('../utils/paymentEncryption');
 const { decrypt } = require('../utils/paymentEncryption');
 
@@ -46,6 +47,36 @@ function otpHash(email, purpose, otp) {
   return crypto.createHash('sha256').update(`${email}:${purpose}:${otp}`).digest('hex');
 }
 
+function normalizePhone(phone = '') {
+  return String(phone).replace(/\D/g, '').trim();
+}
+
+async function issuePhoneOtp(phone, purpose, payload = {}) {
+  const now = new Date();
+  const existing = await PhoneOtp.findOne({ phone, purpose });
+  if (existing?.resendAt > now) {
+    const error = new Error('Please wait before requesting another OTP.');
+    error.status = 429;
+    throw error;
+  }
+  const otp = String(crypto.randomInt(0, 1000000)).padStart(6, '0');
+  await PhoneOtp.deleteOne({ phone, purpose });
+  await PhoneOtp.collection.insertOne({
+    phone,
+    purpose,
+    otpHash: otpHash(phone, purpose, otp),
+    payload,
+    expiresAt: new Date(now.getTime() + OTP_TTL_MS),
+    resendAt: new Date(now.getTime() + RESEND_COOLDOWN_MS),
+    attempts: 0,
+    resendCount: (existing?.resendCount || 0) + 1,
+    consumed: false,
+    createdAt: now,
+    updatedAt: now
+  });
+  return { delivered: true, devOtp: otp };
+}
+
 function createToken(user) {
   return jwt.sign({ id: user._id, name: user.name, role: user.role || 'USER' }, process.env.JWT_SECRET, { expiresIn: '7d' });
 }
@@ -70,7 +101,7 @@ async function sendOtpEmail(email, otp, purpose) {
     text: `Your PetsMandi verification code is ${otp}. It expires in 5 minutes and can be used once.`,
     html: `<p>Your PetsMandi verification code is <strong>${otp}</strong>.</p><p>It expires in 5 minutes and can be used once.</p>`
   });
-  return { delivered: true };
+  return { delivered: true, devOtp: otp };
 }
 
 async function issueOtp(email, purpose, payload = {}) {
@@ -88,19 +119,20 @@ async function issueOtp(email, purpose, payload = {}) {
   }
 
   const otp = String(crypto.randomInt(0, 1000000)).padStart(6, '0');
-  await EmailOtp.findOneAndUpdate(
-    { email, purpose },
-    {
-      otpHash: otpHash(email, purpose, otp),
-      payload,
-      expiresAt: new Date(now.getTime() + OTP_TTL_MS),
-      resendAt: new Date(now.getTime() + RESEND_COOLDOWN_MS),
-      attempts: 0,
-      resendCount: (existing?.resendCount || 0) + 1,
-      consumed: false
-    },
-    { upsert: true, new: true, setDefaultsOnInsert: true }
-  );
+  await EmailOtp.deleteOne({ email, purpose });
+  await EmailOtp.collection.insertOne({
+    email,
+    purpose,
+    otpHash: otpHash(email, purpose, otp),
+    payload,
+    expiresAt: new Date(now.getTime() + OTP_TTL_MS),
+    resendAt: new Date(now.getTime() + RESEND_COOLDOWN_MS),
+    attempts: 0,
+    resendCount: (existing?.resendCount || 0) + 1,
+    consumed: false,
+    createdAt: now,
+    updatedAt: now
+  });
   const delivery = await sendOtpEmail(email, otp, purpose);
   return delivery;
 }
@@ -108,43 +140,45 @@ async function issueOtp(email, purpose, payload = {}) {
 router.post('/send-otp', async (req, res) => {
   try {
     const email = normalizeEmail(req.body.email);
+    const phone = normalizePhone(req.body.phone);
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return res.status(400).json({ message: 'Enter a valid email address.' });
+    if (!/^([6-9]\d{9})$/.test(phone)) return res.status(400).json({ message: 'Enter a valid 10-digit Indian mobile number.' });
     if (await User.exists({ email })) return res.status(409).json({ message: 'Email is already registered.' });
-    if (req.body.phone && await User.exists({ phone: String(req.body.phone).trim() })) {
+    if (await User.exists({ phone })) {
       return res.status(409).json({ message: 'Mobile number is already registered.' });
     }
-    const delivery = await issueOtp(email, 'registration', {
+    const delivery = await issuePhoneOtp(phone, 'registration', {
       name: (req.body.name || '').trim(),
-      phone: String(req.body.phone || '').trim(),
+      email,
       password: req.body.password || '',
       confirmPassword: req.body.confirmPassword || ''
     });
     res.json({
       success: true,
-      message: delivery?.delivered ? 'OTP sent successfully.' : 'System OTP generated. Enter the code below.',
-      ...(delivery?.devOtp ? { devOtp: delivery.devOtp } : {})
+      message: 'Verification code generated.',
+      devOtp: delivery.devOtp
     });
   } catch (err) {
     res.status(err.status || 500).json({ message: err.message || 'Unable to send OTP.' });
   }
 });
 
-router.post('/verify-email-otp', async (req, res) => {
-  const email = normalizeEmail(req.body.email);
+router.post('/verify-mobile-otp', async (req, res) => {
+  const phone = normalizePhone(req.body.phone);
   const otp = String(req.body.otp || '');
-  const record = await EmailOtp.findOne({ email, purpose: 'registration' });
+  const record = await PhoneOtp.findOne({ phone, purpose: 'registration' });
   if (!record || record.consumed) return res.status(400).json({ message: 'Please request a new OTP.' });
   if (record.expiresAt <= new Date()) return res.status(400).json({ message: 'OTP expired.' });
   if (record.attempts >= MAX_ATTEMPTS) return res.status(429).json({ message: 'Too many incorrect OTP attempts. Please request a new OTP.' });
   if (!/^\d{6}$/.test(otp)) return res.status(400).json({ message: 'Invalid OTP.' });
-  if (record.otpHash !== otpHash(email, 'registration', otp)) {
+  if (record.otpHash !== otpHash(phone, 'registration', otp)) {
     record.attempts += 1;
     await record.save();
     return res.status(400).json({ message: 'Invalid OTP.' });
   }
   record.consumed = true;
   await record.save();
-  res.json({ success: true, message: 'Email verified successfully.' });
+  res.json({ success: true, message: 'Mobile number verified successfully.' });
 });
 
 router.post('/register', async (req, res) => {
@@ -155,9 +189,9 @@ router.post('/register', async (req, res) => {
     const phone = String(req.body.phone).trim();
     if (await User.exists({ email })) return res.status(409).json({ message: 'Email already registered.' });
     if (await User.exists({ phone })) return res.status(409).json({ message: 'Mobile number already registered.' });
-    const verification = await EmailOtp.findOne({ email, purpose: 'registration', consumed: true });
-    if (!verification || verification.payload?.phone !== phone) {
-      return res.status(403).json({ message: 'Please verify your email before creating an account.' });
+    const verification = await PhoneOtp.findOne({ phone, purpose: 'registration', consumed: true });
+    if (!verification || verification.payload?.email !== email) {
+      return res.status(403).json({ message: 'Please verify your mobile number before creating an account.' });
     }
     const passwordHash = await bcrypt.hash(req.body.password, 12);
     const user = await User.create({
@@ -172,7 +206,7 @@ router.post('/register', async (req, res) => {
       bankAccountEncrypted: req.body.paymentPreference === 'BANK_TRANSFER' ? encrypt(req.body.accountNumber.trim()) : '',
       bankIfscEncrypted: req.body.paymentPreference === 'BANK_TRANSFER' ? encrypt(req.body.ifsc.trim().toUpperCase()) : ''
     });
-    await EmailOtp.deleteOne({ _id: verification._id });
+    await PhoneOtp.deleteOne({ _id: verification._id });
     const token = createToken(user);
     res.status(201).json({ token, user: { id: user._id, name: user.name, email: user.email, phone: user.phone, role: user.role } });
   } catch (err) {
@@ -209,22 +243,21 @@ router.post('/login', async (req, res) => {
 router.post('/forgot-password', async (req, res) => {
   const email = normalizeEmail(req.body.email);
   const user = await User.findOne({ email });
-  if (user) {
-    try {
-      const delivery = await issueOtp(email, 'password-reset');
-      if (delivery?.devOtp) {
-        return res.json({
-          success: true,
-          message: 'System OTP generated. Enter the code below.',
-          devOtp: delivery.devOtp
-        });
-      }
-    } catch (err) {
-      if (err.status) return res.status(err.status).json({ message: err.message });
-      throw err;
+  if (!user) return res.status(404).json({ message: 'This email is not registered.' });
+  try {
+    const delivery = await issueOtp(email, 'password-reset');
+    if (delivery?.devOtp) {
+      return res.json({
+        success: true,
+        message: 'System OTP generated. Enter the code below.',
+        devOtp: delivery.devOtp
+      });
     }
+  } catch (err) {
+    if (err.status) return res.status(err.status).json({ message: err.message });
+    throw err;
   }
-  res.json({ success: true, message: 'If the email is registered, a verification OTP has been sent.' });
+  res.json({ success: true, message: 'Verification OTP sent to your registered email.' });
 });
 
 router.post('/verify-reset-otp', async (req, res) => {
@@ -246,6 +279,8 @@ router.post('/verify-reset-otp', async (req, res) => {
 
 router.post('/reset-password', async (req, res) => {
   const email = normalizeEmail(req.body.email);
+  const user = await User.findOne({ email });
+  if (!user) return res.status(404).json({ message: 'This email is not registered.' });
   const password = req.body.password || '';
   if (!isStrongPassword(password)) return res.status(400).json({ message: 'Password does not meet the security requirements.' });
   if (password !== req.body.confirmPassword) return res.status(400).json({ message: 'Passwords do not match.' });
